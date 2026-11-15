@@ -1,0 +1,93 @@
+name: APK yig'ish
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Repoda zip bo'lsa — har doim zip ichidagi (eng yangi) kod ishlatiladi
+      - name: Zip'ni ochish
+        run: |
+          ZIP=""
+          if [ -f MROS-Xabarlar.zip ]; then ZIP=MROS-Xabarlar.zip; else ZIP=$(ls *.zip 2>/dev/null | head -n 1); fi
+          if [ -n "$ZIP" ]; then
+            echo "Zip ishlatiladi: $ZIP"
+            rm -rf _src
+            unzip -q -o "$ZIP" -d _src
+            SETTINGS=$(find _src -maxdepth 3 -name settings.gradle.kts | head -n 1)
+            if [ -z "$SETTINGS" ]; then echo "Zip ichida settings.gradle.kts yo'q"; exit 1; fi
+            SRC=$(dirname "$SETTINGS")
+            rm -rf app
+            cp -a "$SRC"/. .
+            rm -rf _src
+          fi
+          if [ ! -f settings.gradle.kts ]; then echo "Loyiha topilmadi (zip yoki fayllarni yuklang)"; exit 1; fi
+          ls -la
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Eskirgan "tools" paketi o'rniga faqat kerakli paketlar
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: APK yig'ish
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace 2>&1 | tee build.log
+
+      # Xato bo'lsa — run sahifasining o'zida (Summary) ko'rsatadi
+      - name: Xatolarni ko'rsatish
+        if: failure()
+        run: |
+          {
+            echo "## ❌ Yig'ishda xato"
+            echo '```'
+            grep -E "^e: |error:|What went wrong|Could not|FAILED" -A2 build.log | head -150 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Xato logini saqlash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: APK ni tayyorlash
+        run: |
+          APK=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then echo "APK topilmadi"; find app/build/outputs -type f | head -50; exit 1; fi
+          echo "Topildi: $APK"
+          cp "$APK" MROS-Xabarlar.apk
+          ls -la MROS-Xabarlar.apk
+          echo "## ✅ APK tayyor — Releases bo'limidan yuklab oling" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MROS-Xabarlar-APK
+          path: MROS-Xabarlar.apk
+
+      # Releases bo'limiga to'g'ridan-to'g'ri .apk qilib chiqaradi (telefonda oson yuklanadi)
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: MROS Xabarlar (${{ github.run_number }})
+          body: "iOS 27 uslubidagi SMS ilova. MROS-Xabarlar.apk ni yuklab o'rnating."
+          files: MROS-Xabarlar.apk
+          make_latest: true
