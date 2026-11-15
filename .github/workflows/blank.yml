@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -38,13 +41,48 @@ jobs:
 
       - name: APK yig'ish
         run: |
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace
+          ./gradlew assembleRelease --stacktrace 2>&1 | tee build.log
 
-      - name: Nomini o'zgartirish
-        run: cp app/build/outputs/apk/release/app-release.apk MROS-Xabarlar.apk
+      # Xato bo'lsa — run sahifasining o'zida (Summary) ko'rsatadi
+      - name: Xatolarni ko'rsatish
+        if: failure()
+        run: |
+          {
+            echo "## ❌ Yig'ishda xato"
+            echo '```'
+            grep -E "^e: |error:|What went wrong|Could not|FAILED" -A2 build.log | head -150 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Xato logini saqlash
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      - name: APK ni tayyorlash
+        run: |
+          APK=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          if [ -z "$APK" ]; then echo "APK topilmadi"; find app/build/outputs -type f | head -50; exit 1; fi
+          echo "Topildi: $APK"
+          cp "$APK" MROS-Xabarlar.apk
+          ls -la MROS-Xabarlar.apk
+          echo "## ✅ APK tayyor — Releases bo'limidan yuklab oling" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
           name: MROS-Xabarlar-APK
           path: MROS-Xabarlar.apk
+
+      # Releases bo'limiga to'g'ridan-to'g'ri .apk qilib chiqaradi (telefonda oson yuklanadi)
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: MROS Xabarlar (${{ github.run_number }})
+          body: "iOS 27 uslubidagi SMS ilova. MROS-Xabarlar.apk ni yuklab o'rnating."
+          files: MROS-Xabarlar.apk
+          make_latest: true
